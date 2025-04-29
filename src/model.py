@@ -1,7 +1,8 @@
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch
 import math
+import torch.nn.functional as F
+
 
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self, embed_dim, num_heads):
@@ -23,7 +24,8 @@ class MultiHeadSelfAttention(nn.Module):
 
         scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
+            # mask: (B, 1, 1, T)
+            scores = scores.masked_fill(mask == 0, float('-inf'))
         attn = F.softmax(scores, dim=-1)
         context = torch.matmul(attn, v)
         context = context.transpose(1,2).contiguous().view(B, T, C)
@@ -54,7 +56,7 @@ class TransformerEncoderLayer(nn.Module):
         return x
 
 class BERTModel(nn.Module):
-    def __init__(self, vocab_size, embed_dim=128, num_heads=4, ff_dim=256, num_layers=2, max_len=512):
+    def __init__(self, vocab_size, embed_dim=128, num_heads=4, ff_dim=256, num_layers=2, max_len=512, num_classes=3):
         super().__init__()
         self.token_emb = nn.Embedding(vocab_size, embed_dim)
         self.pos_emb = nn.Embedding(max_len, embed_dim)
@@ -62,14 +64,16 @@ class BERTModel(nn.Module):
             TransformerEncoderLayer(embed_dim, num_heads, ff_dim) for _ in range(num_layers)
         ])
         self.norm = nn.LayerNorm(embed_dim)
-        self.classifier = nn.Linear(embed_dim, 3)  # 3 classes for bias
+        self.classifier = nn.Linear(embed_dim, num_classes)
         self.max_len = max_len
 
     def forward(self, input_ids, attention_mask):
         positions = torch.arange(0, input_ids.size(1)).unsqueeze(0).to(input_ids.device)
         x = self.token_emb(input_ids) + self.pos_emb(positions)
+        # attention_mask: (B, T) -> (B, 1, 1, T)
+        mask = attention_mask.unsqueeze(1).unsqueeze(2)
         for layer in self.layers:
-            x = layer(x, attention_mask.unsqueeze(1).unsqueeze(2))
+            x = layer(x, mask)
         x = self.norm(x)
         cls_token = x[:, 0, :]
         return self.classifier(cls_token)
